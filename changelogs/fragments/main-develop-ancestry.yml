@@ -1,0 +1,2 @@
+trivial:
+  - Preserve the released ``main`` ancestry when synchronizing the Heavy-test implementation into ``develop``.
