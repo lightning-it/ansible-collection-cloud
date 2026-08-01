@@ -17,7 +17,9 @@ provisioner:
       localhost:
         ansible_connection: local
   playbooks:
+    cleanup: finalize.yml
     converge: converge.yml
+    destroy: finalize.yml
     verify: verify.yml
 
 scenario:
