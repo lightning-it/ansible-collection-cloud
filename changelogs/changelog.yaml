@@ -1,3 +1,17 @@
 ---
 ancestor: null
-releases: {}
+releases:
+  1.1.0:
+    changes:
+      bugfixes:
+        - Add the protected repository-owned Hetzner Object Storage Heavy scenario
+          required by the central release gate.
+      major_changes:
+        - Add the canonical hetzner_object_storage role with deterministic least-privilege
+          external-principal policies and Plan, Audit, and Reconcile lifecycles.
+    fragments:
+      - hetzner-heavy-scenario.yml
+      - hetzner-object-storage.yml
+      - main-develop-ancestry.yml
+      - shared-assets-sync.yml
+    release_date: '2026-08-01'
