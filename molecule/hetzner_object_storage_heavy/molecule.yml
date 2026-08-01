@@ -1,0 +1,32 @@
+---
+dependency:
+  name: shell
+  command: python -m pip install --disable-pip-version-check boto3==1.40.76
+
+driver:
+  name: default
+
+platforms:
+  - name: localhost
+    managed: false
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+
+scenario:
+  name: hetzner_object_storage_heavy
+  test_sequence:
+    - dependency
+    - syntax
+    - converge
+    - verify
+
+verifier:
+  name: ansible
