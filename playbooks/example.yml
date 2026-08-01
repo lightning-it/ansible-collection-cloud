@@ -1,0 +1,13 @@
+---
+- name: Plan one protected Hetzner Object Storage bucket
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - role: lit.cloud.hetzner_object_storage
+      vars:
+        hetzner_object_storage_action: plan
+        hetzner_object_storage_endpoint: https://fsn1.your-objectstorage.com
+        hetzner_object_storage_region: fsn1
+        hetzner_object_storage_bucket: example-protected-backup
+        hetzner_object_storage_prefix: host01

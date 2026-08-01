@@ -1,0 +1,293 @@
+# yamllint disable rule:truthy
+---
+name: Prepare collection release
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Release version, for example 1.2.3. Leave empty on manual runs to calculate the next feature version.
+        required: false
+        default: ""
+      base_branch:
+        description: Base branch. Leave empty to prefer develop, then main.
+        required: false
+        default: ""
+      target_branch:
+        description: Release PR target branch. Must be main.
+        required: false
+        default: main
+      create_github_release:
+        description: Create a GitHub release after merge.
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      publish_galaxy:
+        description: Publish to Ansible Galaxy after merge.
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare release PR
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'push' &&
+        !startsWith(github.event.head_commit.message, 'chore(release): prepare v')
+      )
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.14"
+
+      - name: Install release tools
+        run: >-
+          python -m pip install --disable-pip-version-check --no-input
+          ansible-core==2.18.13 antsibull-changelog==0.35.1 PyYAML==6.0.3
+
+      - name: Mint release automation App token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Resolve release automation App bot identity
+        id: release-bot
+        env:
+          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bot_json="$(gh api "users/${APP_SLUG}%5Bbot%5D" 2>/dev/null || printf '{}')"
+          login="$(jq -r '.login // ""' <<<"$bot_json")"
+          bot_id="$(jq -r '.id // ""' <<<"$bot_json")"
+          if [ "$login" != "${APP_SLUG}[bot]" ] || ! [[ "$bot_id" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unable to resolve the release automation App bot identity."
+            exit 1
+          fi
+          echo "login=$login" >>"$GITHUB_OUTPUT"
+          echo "email=${bot_id}+${login}@users.noreply.github.com" >>"$GITHUB_OUTPUT"
+
+      - name: Prepare release branch
+        id: prepare-release
+        env:
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+          BASE_BRANCH_INPUT: ${{ github.event.inputs.base_branch }}
+          TARGET_BRANCH_INPUT: ${{ github.event.inputs.target_branch }}
+          CREATE_GITHUB_RELEASE_INPUT: ${{ github.event.inputs.create_github_release }}
+          PUBLISH_GALAXY_INPUT: ${{ github.event.inputs.publish_galaxy }}
+          AUTO_RELEASE_BUMP: minor
+        run: |
+          set -euo pipefail
+
+          bot_login="$(gh api "users/lightning-it-release-automation%5Bbot%5D" --jq .login)"
+          if [ "$bot_login" != "lightning-it-release-automation[bot]" ]; then
+            echo "::error::Release App identity mismatch: expected lightning-it-release-automation[bot]."
+            exit 1
+          fi
+          gh auth setup-git
+
+          VERSION="${VERSION_INPUT:-}"
+          case "$VERSION" in
+            v*) VERSION="${VERSION#v}" ;;
+          esac
+          TARGET_BRANCH="${TARGET_BRANCH_INPUT:-main}"
+          CREATE_GITHUB_RELEASE="${CREATE_GITHUB_RELEASE_INPUT:-true}"
+          PUBLISH_GALAXY="${PUBLISH_GALAXY_INPUT:-true}"
+
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            BASE_BRANCH="main"
+          elif [ -n "$BASE_BRANCH_INPUT" ]; then
+            BASE_BRANCH="$BASE_BRANCH_INPUT"
+          elif git ls-remote --exit-code --heads origin develop >/dev/null 2>&1; then
+            BASE_BRANCH="develop"
+          else
+            BASE_BRANCH="$TARGET_BRANCH"
+          fi
+          if [ "$TARGET_BRANCH" != "main" ]; then
+            echo "::error::Collection release PRs must target main."
+            exit 1
+          fi
+
+          git config user.name "lightning-it-release-automation[bot]"
+          git config user.email "307565056+lightning-it-release-automation[bot]@users.noreply.github.com"
+          git fetch origin "$BASE_BRANCH" "$TARGET_BRANCH"
+          git switch -C release-prepare-base "origin/$BASE_BRANCH"
+
+          fragment_count="$(
+            find changelogs/fragments \
+              -maxdepth 1 \
+              -type f \
+              \( -name '*.yml' -o -name '*.yaml' \) \
+              ! -name '.gitkeep' \
+              | wc -l
+          )"
+          if [ "$fragment_count" -eq 0 ]; then
+            echo "No changelog fragments found; no collection release PR needed."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "$VERSION" ]; then
+            VERSION="$(
+              python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+          import yaml
+
+          data = yaml.safe_load(Path("galaxy.yml").read_text()) or {}
+          current = str(data.get("version", "")).removeprefix("v")
+          match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:[-.][0-9A-Za-z.-]+)?", current)
+          if not match:
+              raise SystemExit(f"Cannot calculate next version from galaxy.yml version: {current!r}")
+          major, minor, patch = map(int, match.groups())
+          bump = os.environ.get("AUTO_RELEASE_BUMP", "minor")
+          if bump == "major":
+              print(f"{major + 1}.0.0")
+          elif bump == "patch":
+              print(f"{major}.{minor}.{patch + 1}")
+          else:
+              print(f"{major}.{minor + 1}.0")
+          PY
+            )"
+          fi
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Version must be semantic versioning, for example 1.2.3."
+            exit 1
+          fi
+          export VERSION
+
+          RELEASE_BRANCH="release/v${VERSION}"
+          echo "Preparing release PR for v${VERSION} from ${BASE_BRANCH} to ${TARGET_BRANCH}."
+
+          git switch -C "$RELEASE_BRANCH" "origin/$BASE_BRANCH"
+
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+
+          class LintFriendlyDumper(yaml.SafeDumper):
+              def increase_indent(self, flow=False, indentless=False):
+                  return super().increase_indent(flow, False)
+
+          def write_yaml(path, data):
+              path.write_text(
+                  yaml.dump(
+                      data,
+                      Dumper=LintFriendlyDumper,
+                      sort_keys=False,
+                      explicit_start=True,
+                  )
+              )
+
+          version = os.environ["VERSION"]
+          path = Path("galaxy.yml")
+          data = yaml.safe_load(path.read_text())
+          data["version"] = version
+          write_yaml(path, data)
+          PY
+
+          antsibull-changelog lint
+          antsibull-changelog release
+
+          python - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          class LintFriendlyDumper(yaml.SafeDumper):
+              def increase_indent(self, flow=False, indentless=False):
+                  return super().increase_indent(flow, False)
+
+          for path in (
+              Path("galaxy.yml"),
+              Path("changelogs/changelog.yaml"),
+              Path("changelogs/.plugin-cache.yaml"),
+          ):
+              if not path.exists():
+                  continue
+              data = yaml.safe_load(path.read_text())
+              path.write_text(
+                  yaml.dump(
+                      data,
+                      Dumper=LintFriendlyDumper,
+                      sort_keys=False,
+                      explicit_start=True,
+                  )
+              )
+          PY
+
+          ansible-galaxy collection build --force
+
+          tarball="$(ls ./*.tar.gz)"
+          summary="$(
+            awk \
+              '/^v'"$VERSION"'$/{flag=1; print; next} /^v[0-9]/{if(flag) exit} flag {print}' \
+              CHANGELOG.rst
+          )"
+
+          git add galaxy.yml changelogs CHANGELOG.rst
+          git commit -m "chore(release): prepare v${VERSION}"
+          gh auth setup-git
+          git push --force-with-lease origin "$RELEASE_BRANCH"
+
+          body_file="$(mktemp)"
+          {
+            echo "## Release v${VERSION}"
+            echo
+            echo "Base branch: \`${BASE_BRANCH}\`"
+            echo "Target branch: \`${TARGET_BRANCH}\`"
+            echo "Build artifact: \`${tarball}\`"
+            echo "GitHub release creation: \`${CREATE_GITHUB_RELEASE}\`"
+            echo "Galaxy publishing: \`${PUBLISH_GALAXY}\`"
+            echo
+            echo "## Changelog summary"
+            echo
+            if [ -n "$summary" ]; then
+              echo '```rst'
+              echo "$summary"
+              echo '```'
+            else
+              echo "See generated changelog files in this PR."
+            fi
+          } > "$body_file"
+
+          existing="$(
+            gh pr list \
+              --base "$TARGET_BRANCH" \
+              --head "$RELEASE_BRANCH" \
+              --state open \
+              --json url \
+              --jq '.[0].url'
+          )"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "Release v${VERSION}" --body-file "$body_file"
+          else
+            gh pr create \
+              --base "$TARGET_BRANCH" \
+              --head "$RELEASE_BRANCH" \
+              --title "Release v${VERSION}" \
+              --body-file "$body_file"
+          fi
