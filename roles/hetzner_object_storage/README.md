@@ -51,7 +51,7 @@ An empty list preserves the original bucket-only Plan/Audit/Reconcile contract
 and does not manage a bucket policy. When principals are declared, the role
 renders one deterministic bucket policy with the Hetzner-documented principal
 form `arn:aws:iam:::user/p<project_id>:<access_key>`. Sanitized results expose
-only the selected profile names and a policy SHA-256 digest, never secrets or
+only the selected profile names and, when a policy is managed, its SHA-256 digest; never secrets or
 the access keys embedded in the policy.
 
 Principal syntax and the separate-project least-privilege model follow the
