@@ -81,6 +81,7 @@
           - hetzner_object_storage_result.action == 'plan'
           - not hetzner_object_storage_result.changed | bool
           - hetzner_object_storage_result.principal_profiles == []
+          - hetzner_object_storage_result.policy_sha256 is undefined
         quiet: true
 
     - name: Restore the external-principal planning contract
