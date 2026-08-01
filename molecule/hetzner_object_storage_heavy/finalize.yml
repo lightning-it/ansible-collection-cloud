@@ -1,0 +1,28 @@
+---
+- name: Finalize the owner-scoped retained Object Lock fixture
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Check whether this run created a retained fixture
+      ansible.builtin.stat:
+        path: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/heavy-fixture.yml"
+      register: _fixture_file
+
+    - name: Read the retained fixture identity
+      ansible.builtin.include_vars:
+        file: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/heavy-fixture.yml"
+        name: _fixture
+      when: _fixture_file.stat.exists
+
+    - name: Require exact ownership before retaining the locked fixture
+      ansible.builtin.assert:
+        that:
+          - _fixture.owner == lookup('env', 'MOLECULE_TEST_OWNER')
+          - _fixture.run_id == lookup('env', 'MOLECULE_TEST_RUN_ID')
+          - _fixture.run_attempt == lookup('env', 'MOLECULE_TEST_RUN_ATTEMPT')
+          - _fixture.candidate_sha == lookup('env', 'QUALITY_SOURCE_SHA')
+          - _fixture.expires_after_days | int == 31
+        fail_msg: Refusing to finalize a fixture that is not owned by the exact Heavy run.
+        quiet: true
+      when: _fixture_file.stat.exists

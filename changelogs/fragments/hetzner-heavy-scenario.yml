@@ -1,0 +1,3 @@
+---
+bugfixes:
+  - Add the protected repository-owned Hetzner Object Storage Heavy scenario required by the central release gate.
