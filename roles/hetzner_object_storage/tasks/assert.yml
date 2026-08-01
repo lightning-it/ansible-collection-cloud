@@ -1,0 +1,121 @@
+---
+- name: Validate Hetzner Object Storage CaC contract
+  ansible.builtin.assert:
+    that:
+      - hetzner_object_storage_action in ['plan', 'audit', 'reconcile']
+      - hetzner_object_storage_delegate_to is string
+      - hetzner_object_storage_delegate_to | trim | length > 0
+      - hetzner_object_storage_endpoint is string
+      - >-
+        hetzner_object_storage_endpoint
+        is match('^https://(fsn1|nbg1|hel1)\\.your-objectstorage\\.com$')
+      - hetzner_object_storage_region in ['fsn1', 'nbg1', 'hel1']
+      - >-
+        hetzner_object_storage_endpoint
+        == 'https://' ~ hetzner_object_storage_region ~ '.your-objectstorage.com'
+      - hetzner_object_storage_bucket is string
+      - >-
+        hetzner_object_storage_bucket
+        is match('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$')
+      - "'..' not in hetzner_object_storage_bucket"
+      - "'.-' not in hetzner_object_storage_bucket"
+      - "'-.' not in hetzner_object_storage_bucket"
+      - hetzner_object_storage_bucket_project_id is string
+      - >-
+        hetzner_object_storage_bucket_project_id | length == 0
+        or hetzner_object_storage_bucket_project_id is match('^[1-9][0-9]*$')
+      - hetzner_object_storage_external_principals is sequence
+      - hetzner_object_storage_external_principals is not string
+      - >-
+        hetzner_object_storage_external_principals | length == 0
+        or hetzner_object_storage_bucket_project_id | length > 0
+      - hetzner_object_storage_prefix is string
+      - not hetzner_object_storage_prefix.startswith('/')
+      - not hetzner_object_storage_prefix.endswith('/')
+      - hetzner_object_storage_use_vault is boolean
+      - hetzner_object_storage_versioning is boolean
+      - hetzner_object_storage_versioning | bool
+      - hetzner_object_storage_object_lock_enabled is boolean
+      - hetzner_object_storage_object_lock_enabled | bool
+      - hetzner_object_storage_object_lock_mode in ['GOVERNANCE', 'COMPLIANCE']
+      - hetzner_object_storage_object_lock_retention_days | int > 0
+      - hetzner_object_storage_abort_incomplete_multipart_upload_days | int > 0
+      - hetzner_object_storage_validate_certs is boolean
+      - hetzner_object_storage_validate_certs | bool
+    fail_msg: >-
+      The Hetzner Object Storage contract is incomplete or unsafe. Use one
+      supported HTTPS location endpoint, a private DNS-compatible bucket name,
+      versioning, Object Lock, positive retention, and TLS verification.
+    quiet: true
+
+- name: Validate separate-project Hetzner S3 principals
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | list | sort == ['access_key', 'name', 'profile', 'project_id']
+      - item.name is string
+      - item.name is match('^[a-z][a-z0-9-]{1,31}$')
+      - item.project_id is string
+      - item.project_id is match('^[1-9][0-9]*$')
+      - item.project_id != hetzner_object_storage_bucket_project_id
+      - item.access_key is string
+      - item.access_key is match('^[A-Za-z0-9]{16,64}$')
+      - item.profile in _hetzner_object_storage_permission_profiles
+    fail_msg: >-
+      Every principal must contain only name, external project_id, access_key,
+      and one fixed admin/writer/reader/reviewer profile. Same-project keys are
+      not least privilege and are rejected.
+    quiet: true
+  loop: "{{ hetzner_object_storage_external_principals }}"
+  loop_control:
+    label: "{{ item.name | default('invalid-principal') }}"
+  no_log: true
+
+- name: Validate unique Hetzner S3 principal identities
+  ansible.builtin.assert:
+    that:
+      - >-
+        hetzner_object_storage_external_principals
+        | map(attribute='name') | list | unique | length
+        == hetzner_object_storage_external_principals | length
+      - >-
+        hetzner_object_storage_external_principals
+        | map(attribute='access_key') | list | unique | length
+        == hetzner_object_storage_external_principals | length
+    fail_msg: Principal names and access keys must be unique.
+    quiet: true
+  no_log: true
+
+- name: Validate explicit Hetzner S3 credentials
+  ansible.builtin.assert:
+    that:
+      - hetzner_object_storage_access_key is string
+      - hetzner_object_storage_access_key | length > 0
+      - hetzner_object_storage_secret_key is string
+      - hetzner_object_storage_secret_key | length > 0
+    fail_msg: Reconcile and audit require explicit credentials or HashiCorp Vault.
+    quiet: true
+  when:
+    - hetzner_object_storage_action != 'plan'
+    - not hetzner_object_storage_use_vault | bool
+  no_log: true
+
+- name: Validate the HashiCorp Vault credential source
+  ansible.builtin.assert:
+    that:
+      - hetzner_object_storage_vault_addr is string
+      - hetzner_object_storage_vault_addr is match('^https://')
+      - hetzner_object_storage_vault_token is string
+      - hetzner_object_storage_vault_token | length > 0
+      - hetzner_object_storage_vault_kv_mount is string
+      - hetzner_object_storage_vault_kv_mount | trim | length > 0
+      - hetzner_object_storage_vault_kv_path is string
+      - hetzner_object_storage_vault_kv_path | trim | length > 0
+      - hetzner_object_storage_vault_access_key_field | trim | length > 0
+      - hetzner_object_storage_vault_secret_key_field | trim | length > 0
+    fail_msg: Vault-backed reconciliation requires an HTTPS address, token, mount, path, and field names.
+    quiet: true
+  when:
+    - hetzner_object_storage_action != 'plan'
+    - hetzner_object_storage_use_vault | bool
+  no_log: true

@@ -1,0 +1,6 @@
+---
+major_changes:
+  - >-
+    Add the canonical hetzner_object_storage role with deterministic
+    least-privilege external-principal policies and Plan, Audit, and Reconcile
+    lifecycles.

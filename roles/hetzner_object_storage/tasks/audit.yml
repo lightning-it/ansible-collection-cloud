@@ -1,0 +1,61 @@
+---
+- name: Read Hetzner Object Storage buckets
+  amazon.aws.s3_bucket_info:
+    endpoint_url: "{{ hetzner_object_storage_endpoint }}"
+    region: "{{ hetzner_object_storage_region }}"
+    access_key: "{{ _hetzner_object_storage_access_key }}"
+    secret_key: "{{ _hetzner_object_storage_secret_key }}"
+    validate_certs: "{{ hetzner_object_storage_validate_certs }}"
+  register: _hetzner_object_storage_bucket_info
+  delegate_to: "{{ hetzner_object_storage_delegate_to }}"
+  no_log: true
+
+- name: Require the declared Hetzner Object Storage bucket
+  ansible.builtin.assert:
+    that:
+      - >-
+        _hetzner_object_storage_bucket_info.buckets
+        | map(attribute='name')
+        | select('equalto', hetzner_object_storage_bucket)
+        | list | length == 1
+    fail_msg: The declared Hetzner Object Storage bucket is absent or not uniquely visible.
+    quiet: true
+
+- name: Check the declared bucket policy without mutation
+  amazon.aws.s3_bucket:
+    name: "{{ hetzner_object_storage_bucket }}"
+    state: present
+    endpoint_url: "{{ hetzner_object_storage_endpoint }}"
+    region: "{{ hetzner_object_storage_region }}"
+    access_key: "{{ _hetzner_object_storage_access_key }}"
+    secret_key: "{{ _hetzner_object_storage_secret_key }}"
+    policy: "{{ _hetzner_object_storage_bucket_policy }}"
+    validate_certs: "{{ hetzner_object_storage_validate_certs }}"
+  check_mode: true
+  register: _hetzner_object_storage_policy_audit
+  delegate_to: "{{ hetzner_object_storage_delegate_to }}"
+  when: hetzner_object_storage_external_principals | length > 0
+  no_log: true
+
+- name: Reject Hetzner Object Storage bucket-policy drift
+  ansible.builtin.assert:
+    that:
+      - not _hetzner_object_storage_policy_audit.changed | bool
+    fail_msg: The live bucket policy differs from the declared external-principal policy.
+    quiet: true
+  when: hetzner_object_storage_external_principals | length > 0
+
+- name: Publish sanitized Hetzner Object Storage audit result
+  ansible.builtin.set_fact:
+    hetzner_object_storage_result:
+      action: audit
+      bucket: "{{ hetzner_object_storage_bucket }}"
+      changed: false
+      endpoint: "{{ hetzner_object_storage_endpoint }}"
+      exists: true
+      prefix: "{{ hetzner_object_storage_prefix }}"
+      principal_profiles: >-
+        {{ hetzner_object_storage_external_principals | map(attribute='profile') | unique | sort | list }}
+      policy_sha256: >-
+        {{ _hetzner_object_storage_bucket_policy_json | hash('sha256') }}
+      region: "{{ hetzner_object_storage_region }}"

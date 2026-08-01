@@ -1,0 +1,38 @@
+---
+namespace: lit
+name: cloud
+version: 1.0.0
+readme: README.md
+description: Cloud infrastructure configuration and least-privilege orchestration roles for Lightning IT.
+repository: https://github.com/lightning-it/ansible-collection-cloud
+authors:
+  - Lightning IT
+license:
+  - MIT
+tags:
+  - cloud
+  - hetzner
+  - object_storage
+  - security
+  - automation
+dependencies:
+  amazon.aws: 10.3.2
+  community.aws: 10.1.1
+  community.hashi_vault: 7.1.0
+build_ignore:
+  - .ansible
+  - .cache
+  - .git
+  - .github
+  - .gitignore
+  - .molecule
+  - .pytest_cache
+  - .tox
+  - .venv
+  - artifacts
+  - build
+  - dist
+  - molecule
+  - node_modules
+  - tests
+  - "*.tar.gz"
