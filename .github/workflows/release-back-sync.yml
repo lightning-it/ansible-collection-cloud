@@ -1,0 +1,223 @@
+# yamllint disable rule:truthy
+---
+name: Back-sync collection release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to back-sync, for example v1.2.3.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  back-sync:
+    name: Open release back-sync PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Mint release automation App token
+        id: release-app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Resolve release automation App bot identity
+        id: release-bot
+        env:
+          APP_SLUG: ${{ steps.release-app.outputs.app-slug }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bot_json="$(gh api "users/${APP_SLUG}%5Bbot%5D" 2>/dev/null || printf '{}')"
+          login="$(jq -r '.login // ""' <<<"$bot_json")"
+          bot_id="$(jq -r '.id // ""' <<<"$bot_json")"
+          if [ "$login" != "${APP_SLUG}[bot]" ] || ! [[ "$bot_id" =~ ^[0-9]+$ ]]; then
+            echo "::error::Unable to resolve the release automation App bot identity."
+            exit 1
+          fi
+          echo "login=$login" >>"$GITHUB_OUTPUT"
+          echo "email=${bot_id}+${login}@users.noreply.github.com" >>"$GITHUB_OUTPUT"
+
+      - name: Open or update release back-sync PR
+        env:
+          GH_TOKEN: ${{ steps.release-app.outputs.token }}
+          TAG_INPUT: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          bot_login="$(gh api "users/lightning-it-release-automation%5Bbot%5D" --jq .login)"
+          if [ "$bot_login" != "lightning-it-release-automation[bot]" ]; then
+            echo "::error::Release App identity mismatch: expected lightning-it-release-automation[bot]."
+            exit 1
+          fi
+          gh auth setup-git
+
+          tag="${RELEASE_TAG:-${TAG_INPUT:-}}"
+          if [ -z "$tag" ]; then
+            echo "::error::Release tag is required."
+            exit 1
+          fi
+          case "$tag" in
+            v*) ;;
+            *) tag="v${tag}" ;;
+          esac
+
+          if ! git ls-remote --exit-code --heads origin develop >/dev/null 2>&1; then
+            echo "develop branch does not exist; skipping release back-sync."
+            exit 0
+          fi
+
+          git config user.name "lightning-it-release-automation[bot]"
+          git config user.email "307565056+lightning-it-release-automation[bot]@users.noreply.github.com"
+          git fetch origin main develop
+
+          if git merge-base --is-ancestor origin/main origin/develop; then
+            echo "develop already contains main; release back-sync not needed."
+            exit 0
+          fi
+
+          branch="backsync/release-${tag}-to-develop"
+          title="chore: sync ${tag} release back to develop"
+          body=$'Release back-sync from `main` to `develop`.\n\n'
+          body+=$'This PR brings release-generated files, changelog metadata, '
+          body+=$'and `galaxy.yml` version changes back to `develop` after '
+          body+="\`${tag}\` was published.\n\n"
+          body+=$'Merge this PR with a merge commit, not squash or rebase, '
+          body+=$'so `main` becomes an ancestor of `develop`.'
+
+          git switch -C "$branch" origin/develop
+          git merge --no-ff -X ours origin/main \
+            -m "chore: sync ${tag} release back to develop"
+
+          release_paths=(
+            CHANGELOG.rst
+            changelogs/.plugin-cache.yaml
+            changelogs/changelog.yaml
+            galaxy.yml
+          )
+          for path in "${release_paths[@]}"; do
+            if git cat-file -e "origin/main:${path}" 2>/dev/null; then
+              git checkout origin/main -- "$path"
+            else
+              rm -f "$path"
+            fi
+          done
+
+          release_base=""
+          if release_base="$(git rev-parse origin/main^1 2>/dev/null)"; then
+            git diff --name-only --diff-filter=D \
+              "$release_base" origin/main -- changelogs/fragments/ \
+              | xargs -r rm -f
+          fi
+
+          git add -A CHANGELOG.rst changelogs galaxy.yml
+          if ! git diff --cached --quiet; then
+            git commit --amend --no-edit
+          fi
+
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/develop)" ]; then
+            echo "::error::Release back-sync did not create an ancestry commit."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            echo "::error::Release back-sync head does not contain current main ancestry."
+            exit 1
+          fi
+
+          gh auth setup-git
+          if ! git push --force-with-lease origin "$branch"; then
+            existing="$(
+              gh pr list \
+                --repo "$REPO" \
+                --base develop \
+                --head "$branch" \
+                --state open \
+                --json url \
+                --jq '.[0].url'
+            )"
+            if [ -n "$existing" ]; then
+              echo "Release back-sync PR already exists after push race: $existing"
+            else
+              echo "Force-with-lease failed and no open PR exists; retrying branch push."
+              git push --force origin "$branch"
+            fi
+          fi
+
+          if ! gh label list --repo "$REPO" --json name --jq '.[].name' \
+            | grep -Fxq skip-changelog
+          then
+            label_error="$(mktemp)"
+            if ! gh label create skip-changelog \
+                --repo "$REPO" \
+                --description "Changelog fragment intentionally not required for this PR." \
+                --color "6f42c1" 2>"$label_error"
+            then
+              if ! gh label list --repo "$REPO" --json name --jq '.[].name' \
+                | grep -Fxq skip-changelog
+              then
+                cat "$label_error" >&2
+                exit 1
+              fi
+            fi
+          fi
+
+          existing="$(
+            gh pr list \
+              --repo "$REPO" \
+              --base develop \
+              --head "$branch" \
+              --state open \
+              --json url \
+              --jq '.[0].url'
+          )"
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" \
+              --repo "$REPO" \
+              --title "$title" \
+              --body "$body" \
+              --add-label skip-changelog
+          else
+            if ! gh pr create \
+                --repo "$REPO" \
+                --base develop \
+                --head "$branch" \
+                --title "$title" \
+                --body "$body" \
+                --label skip-changelog
+            then
+              existing="$(
+                gh pr list \
+                  --repo "$REPO" \
+                  --base develop \
+                  --head "$branch" \
+                  --state open \
+                  --json url \
+                  --jq '.[0].url'
+              )"
+              if [ -z "$existing" ]; then
+                echo "::error::Failed to create release back-sync PR."
+                exit 1
+              fi
+              echo "Release back-sync PR was created by another run: $existing"
+              gh pr edit "$existing" \
+                --repo "$REPO" \
+                --title "$title" \
+                --body "$body" \
+                --add-label skip-changelog
+            fi
+          fi
