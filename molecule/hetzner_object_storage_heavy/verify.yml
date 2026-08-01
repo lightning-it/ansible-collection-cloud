@@ -4,6 +4,17 @@
   connection: local
   gather_facts: false
   tasks:
+    - name: Require the Molecule evidence paths
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item) | length > 0
+        fail_msg: A required Molecule evidence path is missing.
+        quiet: true
+      loop:
+        - MOLECULE_EPHEMERAL_DIRECTORY
+        - MOLECULE_SCENARIO_DIRECTORY
+        - MOLECULE_TEST_SUCCESS_MARKER
+
     - name: Read the sanitized fixture identity
       ansible.builtin.include_vars:
         file: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/heavy-fixture.yml"

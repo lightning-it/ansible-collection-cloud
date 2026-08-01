@@ -22,7 +22,7 @@
           - _fixture.run_id == lookup('env', 'MOLECULE_TEST_RUN_ID')
           - _fixture.run_attempt == lookup('env', 'MOLECULE_TEST_RUN_ATTEMPT')
           - _fixture.candidate_sha == lookup('env', 'QUALITY_SOURCE_SHA')
-          - _fixture.expires_at_days | int == 31
+          - _fixture.expires_after_days | int == 31
         fail_msg: Refusing to finalize a fixture that is not owned by the exact Heavy run.
         quiet: true
       when: _fixture_file.stat.exists

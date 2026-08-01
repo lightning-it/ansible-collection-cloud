@@ -5,6 +5,10 @@
   gather_facts: false
   vars:
     _required_environment:
+      - MOLECULE_TEST_OWNER
+      - MOLECULE_TEST_RUN_ID
+      - MOLECULE_TEST_RUN_ATTEMPT
+      - QUALITY_SOURCE_SHA
       - HETZNER_S3_ADMIN_ACCESS_KEY
       - HETZNER_S3_ADMIN_SECRET_KEY
       - HETZNER_S3_ADMIN_PROJECT_ID
@@ -68,6 +72,16 @@
         quiet: true
       no_log: true
 
+    - name: Validate the immutable Heavy run identity
+      ansible.builtin.assert:
+        that:
+          - _run_id is match('^[0-9]+$')
+          - _run_attempt is match('^[0-9]+$')
+          - _candidate_sha is match('^[0-9a-f]{40}$')
+          - _owner | length <= 256
+        fail_msg: The Heavy run identity is malformed.
+        quiet: true
+
     - name: Reconcile the isolated locked fixture
       ansible.builtin.include_role:
         name: lit.cloud.hetzner_object_storage
@@ -106,7 +120,7 @@
             {
               'bucket': _bucket,
               'candidate_sha': _candidate_sha,
-              'expires_at_days': 31,
+              'expires_after_days': 31,
               'owner': _owner,
               'policy_sha256': _first_reconcile.policy_sha256,
               'run_attempt': _run_attempt,

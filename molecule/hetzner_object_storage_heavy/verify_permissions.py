@@ -18,13 +18,20 @@ REGION = "fsn1"
 DENIED_CODES = {"AccessDenied", "AllAccessDisabled", "InvalidAccessKeyId", "403"}
 
 
+def required_environment(name: str) -> str:
+    value = os.environ.get(name, "")
+    if not value:
+        raise RuntimeError(f"required protected environment input is missing: {name}")
+    return value
+
+
 def client(profile: str) -> Any:
     return boto3.client(
         "s3",
         endpoint_url=ENDPOINT,
         region_name=REGION,
-        aws_access_key_id=os.environ[f"HETZNER_S3_{profile}_ACCESS_KEY"],
-        aws_secret_access_key=os.environ[f"HETZNER_S3_{profile}_SECRET_KEY"],
+        aws_access_key_id=required_environment(f"HETZNER_S3_{profile}_ACCESS_KEY"),
+        aws_secret_access_key=required_environment(f"HETZNER_S3_{profile}_SECRET_KEY"),
         config=Config(
             connect_timeout=10,
             read_timeout=30,
@@ -64,8 +71,14 @@ def main() -> int:
         Bucket=bucket,
         Tagging={
             "TagSet": [
-                {"Key": "owner", "Value": os.environ["MOLECULE_TEST_OWNER"][:256]},
-                {"Key": "candidate_sha", "Value": os.environ["QUALITY_SOURCE_SHA"]},
+                {
+                    "Key": "owner",
+                    "Value": required_environment("MOLECULE_TEST_OWNER")[:256],
+                },
+                {
+                    "Key": "candidate_sha",
+                    "Value": required_environment("QUALITY_SOURCE_SHA"),
+                },
                 {"Key": "expires_after_days", "Value": "31"},
             ]
         },

@@ -1,7 +1,10 @@
 ---
 dependency:
   name: shell
-  command: python -m pip install --disable-pip-version-check boto3==1.40.76
+  command: >-
+    python -m pip install --disable-pip-version-check
+    boto3==1.40.76 botocore==1.40.76 jmespath==1.1.0
+    python-dateutil==2.9.0.post0 s3transfer==0.14.0 six==1.17.0 urllib3==2.7.0
 
 driver:
   name: default
