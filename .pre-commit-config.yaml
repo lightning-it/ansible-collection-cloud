@@ -1,0 +1,100 @@
+---
+repos:
+  # >>> BEGIN shared-assets-lit pre-commit
+  - repo: local
+    hooks:
+      # -------------------------------------------------------------------
+      # yamllint (via ee-wunder-devtools-ubi9)
+      # -------------------------------------------------------------------
+      - id: yamllint-ee
+        name: yamllint (via ee-wunder-devtools-ubi9)
+        language: system
+        entry: bash scripts/wunder-devtools-ee.sh yamllint
+        pass_filenames: true
+        files: \.(yml|yaml)$
+
+      # -------------------------------------------------------------------
+      # ansible-lint (via ee-wunder-devtools-ubi9)
+      # -------------------------------------------------------------------
+      - id: ansible-lint-ee
+        name: ansible-lint (via ee-wunder-devtools-ubi9)
+        language: system
+        entry: bash scripts/devtools-ansible-lint.sh
+        pass_filenames: false
+        always_run: true
+
+      # -------------------------------------------------------------------
+      # Changelog policy (via ee-wunder-devtools-ubi9)
+      # -------------------------------------------------------------------
+      - id: changelog-policy-ee
+        name: changelog policy (via ee-wunder-devtools-ubi9)
+        language: system
+        entry: bash scripts/devtools-changelog-check.sh
+        pass_filenames: false
+        always_run: true
+
+      # -------------------------------------------------------------------
+      # Molecule tests non-heavy scenarios (via ee-wunder-devtools-ubi9)
+      # -------------------------------------------------------------------
+      - id: molecule-light
+        name: molecule tests non-heavy scenarios (via ee-wunder-devtools-ubi9)
+        language: system
+        entry: bash scripts/devtools-molecule.sh
+        pass_filenames: false
+        always_run: true
+
+      # -------------------------------------------------------------------
+      # GitHub Actions workflow linting (actionlint)
+      # -------------------------------------------------------------------
+      - id: github-actions-lint
+        name: GitHub Actions workflow linting (actionlint)
+        language: system
+        entry: >-
+          bash -lc 'scripts/wunder-container-run.sh run --rm
+          --read-only --network none --cap-drop ALL
+          --security-opt no-new-privileges=true --pids-limit 128
+          --security-opt label=disable
+          --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m
+          -v "$PWD:/repo:ro" -w /repo
+          docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667'
+        pass_filenames: false
+        files: ^\.github/workflows/.*\.ya?ml$
+
+      # -------------------------------------------------------------------
+      # Renovate config linting (renovate-config-validator)
+      # -------------------------------------------------------------------
+      - id: renovate-config-validate
+        name: renovate config linting (renovate-config-validator)
+        language: system
+        pass_filenames: false
+        files: ^renovate\.json$
+        entry: >-
+          bash -lc 'scripts/wunder-container-run.sh run --rm
+          --read-only --network none --cap-drop ALL
+          --security-opt no-new-privileges=true --pids-limit 128
+          --security-opt label=disable
+          --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m
+          -v "$PWD/renovate.json:/repo/renovate.json:ro" -w /repo
+          docker.io/renovate/renovate:43.280.5@sha256:90153a8b9c00bf7a917a985cda9061a701a6890f0422fe05bc74d437f6815e30
+          renovate-config-validator --strict --no-global /repo/renovate.json'
+
+      # -------------------------------------------------------------------
+      # ansible-collection smoke test (via ee-wunder-devtools-ubi9)
+      # -------------------------------------------------------------------
+      - id: collection-smoke
+        name: ansible-collection smoke test (via ee-wunder-devtools-ubi9)
+        language: system
+        entry: bash scripts/devtools-collection-smoke.sh
+        pass_filenames: false
+        always_run: true
+
+      # -------------------------------------------------------------------
+      # Galaxy-style role verification (via ee-wunder-devtools-ubi9)
+      # -------------------------------------------------------------------
+      - id: galaxy-verify
+        name: galaxy-style role verification (via ee-wunder-devtools-ubi9)
+        language: system
+        entry: bash scripts/devtools-galaxy-verify.sh
+        pass_filenames: false
+        files: ^(roles/|galaxy\.yml)
+  # <<< END shared-assets-lit pre-commit
