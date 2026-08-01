@@ -1,0 +1,130 @@
+---
+- name: Reconcile and audit an isolated Hetzner Object Storage fixture
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    _required_environment:
+      - MOLECULE_TEST_OWNER
+      - MOLECULE_TEST_RUN_ID
+      - MOLECULE_TEST_RUN_ATTEMPT
+      - QUALITY_SOURCE_SHA
+      - HETZNER_S3_ADMIN_ACCESS_KEY
+      - HETZNER_S3_ADMIN_SECRET_KEY
+      - HETZNER_S3_ADMIN_PROJECT_ID
+      - HETZNER_S3_WRITER_ACCESS_KEY
+      - HETZNER_S3_WRITER_SECRET_KEY
+      - HETZNER_S3_WRITER_PROJECT_ID
+      - HETZNER_S3_READER_ACCESS_KEY
+      - HETZNER_S3_READER_SECRET_KEY
+      - HETZNER_S3_READER_PROJECT_ID
+      - HETZNER_S3_REVIEWER_ACCESS_KEY
+      - HETZNER_S3_REVIEWER_SECRET_KEY
+      - HETZNER_S3_REVIEWER_PROJECT_ID
+    _owner: "{{ lookup('env', 'MOLECULE_TEST_OWNER') }}"
+    _run_id: "{{ lookup('env', 'MOLECULE_TEST_RUN_ID') }}"
+    _run_attempt: "{{ lookup('env', 'MOLECULE_TEST_RUN_ATTEMPT') }}"
+    _candidate_sha: "{{ lookup('env', 'QUALITY_SOURCE_SHA') }}"
+    _fixture_suffix: "{{ (_run_id ~ '-' ~ _run_attempt ~ '-' ~ _candidate_sha[:8]) | lower }}"
+    _bucket: "lit-cloud-heavy-{{ _fixture_suffix }}"
+    hetzner_object_storage_action: reconcile
+    hetzner_object_storage_endpoint: https://fsn1.your-objectstorage.com
+    hetzner_object_storage_region: fsn1
+    hetzner_object_storage_bucket: "{{ _bucket }}"
+    hetzner_object_storage_prefix: "acceptance/{{ _owner }}"
+    hetzner_object_storage_bucket_project_id: "{{ lookup('env', 'HETZNER_S3_ADMIN_PROJECT_ID') }}"
+    hetzner_object_storage_access_key: "{{ lookup('env', 'HETZNER_S3_ADMIN_ACCESS_KEY') }}"
+    hetzner_object_storage_secret_key: "{{ lookup('env', 'HETZNER_S3_ADMIN_SECRET_KEY') }}"
+    hetzner_object_storage_external_principals:
+      - name: acceptance-writer
+        project_id: "{{ lookup('env', 'HETZNER_S3_WRITER_PROJECT_ID') }}"
+        access_key: "{{ lookup('env', 'HETZNER_S3_WRITER_ACCESS_KEY') }}"
+        profile: writer
+      - name: acceptance-reader
+        project_id: "{{ lookup('env', 'HETZNER_S3_READER_PROJECT_ID') }}"
+        access_key: "{{ lookup('env', 'HETZNER_S3_READER_ACCESS_KEY') }}"
+        profile: reader
+      - name: acceptance-reviewer
+        project_id: "{{ lookup('env', 'HETZNER_S3_REVIEWER_PROJECT_ID') }}"
+        access_key: "{{ lookup('env', 'HETZNER_S3_REVIEWER_ACCESS_KEY') }}"
+        profile: reviewer
+  tasks:
+    - name: Require every protected Heavy credential and project identity
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item) | length > 0
+        fail_msg: "Protected Heavy environment input is incomplete."
+        quiet: true
+      loop: "{{ _required_environment }}"
+      no_log: true
+
+    - name: Require four distinct provider projects
+      ansible.builtin.assert:
+        that:
+          - >-
+            [
+              lookup('env', 'HETZNER_S3_ADMIN_PROJECT_ID'),
+              lookup('env', 'HETZNER_S3_WRITER_PROJECT_ID'),
+              lookup('env', 'HETZNER_S3_READER_PROJECT_ID'),
+              lookup('env', 'HETZNER_S3_REVIEWER_PROJECT_ID')
+            ] | unique | length == 4
+        fail_msg: Heavy acceptance requires one bucket project and three distinct external-principal projects.
+        quiet: true
+      no_log: true
+
+    - name: Validate the immutable Heavy run identity
+      ansible.builtin.assert:
+        that:
+          - _run_id is match('^[0-9]+$')
+          - _run_attempt is match('^[0-9]+$')
+          - _candidate_sha is match('^[0-9a-f]{40}$')
+          - _owner | length <= 256
+        fail_msg: The Heavy run identity is malformed.
+        quiet: true
+
+    - name: Reconcile the isolated locked fixture
+      ansible.builtin.include_role:
+        name: lit.cloud.hetzner_object_storage
+
+    - name: Preserve the first reconciliation result
+      ansible.builtin.set_fact:
+        _first_reconcile: "{{ hetzner_object_storage_result }}"
+
+    - name: Prove reconciliation is idempotent
+      ansible.builtin.include_role:
+        name: lit.cloud.hetzner_object_storage
+
+    - name: Require an unchanged second reconciliation
+      ansible.builtin.assert:
+        that:
+          - not hetzner_object_storage_result.changed | bool
+        quiet: true
+
+    - name: Audit the exact declared state
+      ansible.builtin.include_role:
+        name: lit.cloud.hetzner_object_storage
+      vars:
+        hetzner_object_storage_action: audit
+
+    - name: Exercise the non-mutating plan path
+      ansible.builtin.include_role:
+        name: lit.cloud.hetzner_object_storage
+      vars:
+        hetzner_object_storage_action: plan
+
+    - name: Write sanitized fixture identity for authorization verification
+      ansible.builtin.copy:
+        dest: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/heavy-fixture.yml"
+        content: >-
+          {{
+            {
+              'bucket': _bucket,
+              'candidate_sha': _candidate_sha,
+              'expires_after_days': 31,
+              'owner': _owner,
+              'policy_sha256': _first_reconcile.policy_sha256,
+              'run_attempt': _run_attempt,
+              'run_id': _run_id
+            } | to_nice_yaml
+          }}
+        mode: "0600"

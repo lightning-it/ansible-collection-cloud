@@ -1,0 +1,37 @@
+---
+dependency:
+  name: shell
+  command: >-
+    python -m pip install --disable-pip-version-check
+    boto3==1.40.76 botocore==1.40.76 jmespath==1.1.0
+    python-dateutil==2.9.0.post0 s3transfer==0.14.0 six==1.17.0 urllib3==2.7.0
+
+driver:
+  name: default
+
+platforms:
+  - name: localhost
+    managed: false
+
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    cleanup: finalize.yml
+    converge: converge.yml
+    destroy: finalize.yml
+    verify: verify.yml
+
+scenario:
+  name: hetzner_object_storage_heavy
+  test_sequence:
+    - dependency
+    - syntax
+    - converge
+    - verify
+
+verifier:
+  name: ansible

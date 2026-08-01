@@ -1,0 +1,53 @@
+---
+- name: Verify live least-privilege authorization and publish a success marker
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Require the Molecule evidence paths
+      ansible.builtin.assert:
+        that:
+          - lookup('env', item) | length > 0
+        fail_msg: A required Molecule evidence path is missing.
+        quiet: true
+      loop:
+        - MOLECULE_EPHEMERAL_DIRECTORY
+        - MOLECULE_SCENARIO_DIRECTORY
+        - MOLECULE_TEST_SUCCESS_MARKER
+
+    - name: Read the sanitized fixture identity
+      ansible.builtin.include_vars:
+        file: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/heavy-fixture.yml"
+        name: _fixture
+
+    - name: Run the fail-closed provider authorization probe
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ lookup('env', 'MOLECULE_SCENARIO_DIRECTORY') }}/verify_permissions.py"
+          - "{{ _fixture.bucket }}"
+      register: _authorization_probe
+      changed_when: false
+      no_log: true
+
+    - name: Require the probe to bind its result to this fixture
+      ansible.builtin.assert:
+        that:
+          - (_authorization_probe.stdout | from_json).bucket == _fixture.bucket
+          - (_authorization_probe.stdout | from_json).result == 'passed'
+        quiet: true
+
+    - name: Publish the centrally required success marker
+      ansible.builtin.copy:
+        dest: "{{ lookup('env', 'MOLECULE_TEST_SUCCESS_MARKER') }}"
+        content: >-
+          {{
+            {
+              'bucket': _fixture.bucket,
+              'candidate_sha': _fixture.candidate_sha,
+              'result': 'passed',
+              'run_attempt': _fixture.run_attempt,
+              'run_id': _fixture.run_id
+            } | to_nice_json
+          }}
+        mode: "0600"
