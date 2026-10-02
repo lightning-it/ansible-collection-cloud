@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fail-closed validator for the centrally managed quality-policy contract."""
 
 from __future__ import annotations
@@ -13,7 +12,10 @@ from typing import Any
 try:
     import yaml
 except ImportError as exc:  # pragma: no cover - CI installs PyYAML.
-    raise SystemExit("PyYAML is required: python3 -m pip install PyYAML") from exc
+    raise SystemExit(
+        "PyYAML is missing from the pinned Devtools image; update and normally "
+        "release that image before rerunning the managed quality profile"
+    ) from exc
 
 
 SCHEMA_VERSION = 1
@@ -29,9 +31,9 @@ PROFILE_NAMES = (
 FAST_PROFILES = PROFILE_NAMES[:5]
 CENTRAL_PROFILES = PROFILE_NAMES[5:]
 REQUIRED_ADRS = {
-    "https://wiki.cloud.l-it.io/wiki/spaces/LIT/pages/2886566105",
-    "https://wiki.cloud.l-it.io/wiki/spaces/LIT/pages/2886926524",
-    "https://wiki.cloud.l-it.io/wiki/spaces/LIT/pages/2893119515",
+    "docs/adr/mlx-10-distributed-test-ownership.md",
+    "docs/adr/mlx-40-lifecycle-versioning-release-evidence.md",
+    "docs/adr/mlx-70-prevalidated-candidate-evidence.md",
 }
 PROFILE_FIELDS = {"owner", "executor", "triggers", "blocking", "evidence"}
 EVIDENCE_FIELDS = {"kind", "candidate_bound", "retention_days"}
@@ -73,7 +75,7 @@ def string(value: Any, path: str, errors: list[str]) -> str | None:
 
 
 def boolean(value: Any, path: str, errors: list[str]) -> bool | None:
-    if type(value) is not bool:
+    if not isinstance(value, bool):
         errors.append(f"{path} must be a boolean")
         return None
     return value
@@ -122,7 +124,11 @@ def validate_profile(name: str, profile: Any, errors: list[str]) -> None:
             evidence.get("candidate_bound"), f"{path}.evidence.candidate_bound", errors
         )
         retention_days = evidence.get("retention_days")
-        if type(retention_days) is not int or retention_days < 1:
+        if (
+            isinstance(retention_days, bool)
+            or not isinstance(retention_days, int)
+            or retention_days < 1
+        ):
             errors.append(f"{path}.evidence.retention_days must be an integer >= 1")
         if kind not in {"source-check", "central-validation"}:
             errors.append(f"{path}.evidence.kind must be source-check or central-validation")
@@ -185,8 +191,10 @@ def validate_exceptions(value: Any, errors: list[str], today: date | None) -> No
         for field in ("reason", "owner", "approver"):
             string(item.get(field), f"{path}.{field}", errors)
         adr = string(item.get("adr"), f"{path}.adr", errors)
-        if adr is not None and not adr.startswith("https://"):
-            errors.append(f"{path}.adr must be an https URL")
+        if adr is not None and adr not in REQUIRED_ADRS:
+            errors.append(
+                f"{path}.adr must reference a managed public ADR path"
+            )
         string_list(item.get("compensating_controls"), f"{path}.compensating_controls", errors)
         parsed_dates: dict[str, date] = {}
         for field in ("start", "review", "expires"):
@@ -235,15 +243,21 @@ def validate_policy(data: Any, *, today: date | None = None) -> list[str]:
     if policy is not None:
         exact_keys(policy, {"max_age_hours", "related_adrs", "branch_aggregates"}, "policy", errors)
         max_age_hours = policy.get("max_age_hours")
-        if type(max_age_hours) is not int or not 1 <= max_age_hours <= 36:
+        if (
+            isinstance(max_age_hours, bool)
+            or not isinstance(max_age_hours, int)
+            or not 1 <= max_age_hours <= 36
+        ):
             errors.append("policy.max_age_hours must be an integer from 1 through 36")
         adrs = string_list(policy.get("related_adrs"), "policy.related_adrs", errors)
         if adrs is not None:
             missing_adrs = sorted(REQUIRED_ADRS - set(adrs))
             if missing_adrs:
                 errors.append("policy.related_adrs is missing: " + ", ".join(missing_adrs))
-            if any(not adr.startswith("https://") for adr in adrs):
-                errors.append("policy.related_adrs must contain only https URLs")
+            if any(adr not in REQUIRED_ADRS for adr in adrs):
+                errors.append(
+                    "policy.related_adrs must contain only the managed public ADR paths"
+                )
         aggregates = as_mapping(policy.get("branch_aggregates"), "policy.branch_aggregates", errors)
         if aggregates is not None:
             exact_keys(aggregates, {"develop", "main"}, "policy.branch_aggregates", errors)
